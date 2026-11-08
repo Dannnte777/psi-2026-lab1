@@ -14,12 +14,13 @@ from psi_lab.lab1.filtros import (
     medir_pasabajos,
     respuesta_frecuencia,
 )
-from psi_lab.lab1.sinteticos import ruido_a_snr, suma_tonos, tono
+from psi_lab.lab1.sinteticos import chirp
 
 FS = 1000.0  # [Hz]
 FC = 100.0  # corte del pasabajos de referencia [Hz]
 N_COEF = 101
-N_COEFS_TABLA = (25, 51, 101, 201)
+N_COEFS_TABLA = (21, 51, 101, 201)  # los del enunciado (Tarea 4.2)
+VENTANAS_FIG = ("rect", "hamming", "hann")  # las del enunciado; la tabla agrega blackman
 
 
 def _db(H):
@@ -71,16 +72,19 @@ def _(salida):
 
 @figura("filtros_n_coef")
 def _(salida):
-    fig = Figure(figsize=(8, 4))
-    ax = fig.subplots()
-    for n in N_COEFS_TABLA:
-        freqs, H = respuesta_frecuencia(fir_pasabajos(FC, FS, n), FS)
-        ax.plot(freqs, np.abs(H), lw=0.9, label=f"n_coef={n}")
-    ax.axvline(FC, color="k", ls=":", lw=0.8)
-    ax.set(xlabel="f [Hz]", ylabel="|H(f)|", xlim=(0, 250),
-           title="Hamming: mas coeficientes, transicion mas angosta (misma atenuacion)")
-    ax.legend()
-    ax.grid(alpha=0.3)
+    fig = Figure(figsize=(12, 4))
+    axs = fig.subplots(1, len(VENTANAS_FIG), sharey=True)
+    for ax, v in zip(axs, VENTANAS_FIG):
+        for n in N_COEFS_TABLA:
+            freqs, H = respuesta_frecuencia(fir_pasabajos(FC, FS, n, v), FS)
+            ax.plot(freqs, _db(H), lw=0.9, label=f"n_coef={n}")
+        ax.axvline(FC, color="k", ls=":", lw=0.8)
+        ax.set(xlabel="f [Hz]", title=f"ventana {v}", ylim=(-110, 5))
+        ax.grid(alpha=0.3)
+    axs[0].set_ylabel("|H(f)| [dB]")
+    axs[-1].legend(fontsize=8)
+    fig.suptitle(f"Pasabajos fc={FC:g} Hz, fs={FS:g} Hz: n_coef fija el ancho de transicion, "
+                 "la ventana la atenuacion", fontsize=10)
     fig.tight_layout()
     fig.savefig(salida / "filtros_n_coef.png", dpi=120)
 
@@ -97,27 +101,38 @@ def _(salida):
     )
 
 
-@figura("filtros_aplicacion")
+@figura("filtros_chirp")
 def _(salida):
-    duracion = 0.4
+    """Tarea 4.3: un chirp de 0 a 500 Hz filtrado por el pasabajos de 100 Hz.
+
+    La frecuencia instantanea crece linealmente, f(t) = 500 t / duracion, asi que el eje del
+    tiempo es tambien un eje de frecuencia: la salida conserva la amplitud mientras f < fc y se
+    apaga en la transicion, que en el tiempo dura (ancho de transicion) * duracion / 500.
+    """
+    duracion = 1.0
     t = np.arange(round(FS * duracion)) / FS
-    limpia = tono(50, FS, duracion)
-    x = ruido_a_snr(suma_tonos([50, 300], FS, duracion), snr_db=5, semilla=0)
-    salidas = {
-        "pasabajos 100 Hz": filtrar(x, fir_pasabajos(FC, FS, N_COEF)),
-        "rechazabanda 250-350 Hz": filtrar(x, fir_rechazabanda(250, 350, FS, N_COEF)),
-    }
-    fig = Figure(figsize=(9, 5))
-    axs = fig.subplots(3, 1, sharex=True)
-    axs[0].plot(t, x, lw=0.7)
-    axs[0].set(ylabel="x", title="Entrada: tonos de 50 y 300 Hz + ruido blanco (SNR 5 dB)")
-    for ax, (nombre, y) in zip(axs[1:], salidas.items()):
-        ax.plot(t, limpia, "k--", lw=0.8, label="tono de 50 Hz")
-        ax.plot(t, y, lw=0.9, label=nombre)
-        ax.axvspan(0, N_COEF // 2 / FS, color="0.9")
-        ax.axvspan(duracion - N_COEF // 2 / FS, duracion, color="0.9")
-        ax.set(ylabel="y")
-        ax.legend(loc="upper right", fontsize=8)
-    axs[-1].set_xlabel("t [s]  (gris: transitorio de los bordes)")
+    x = chirp(0, FS / 2, FS, duracion)
+    h = fir_pasabajos(FC, FS, N_COEF)
+    y = filtrar(x, h)
+    ancho, _ = medir_pasabajos(h, FS, FC)
+    t_corte = FC * duracion / (FS / 2)
+
+    fig = Figure(figsize=(10, 5.5))
+    ax_x, ax_y = fig.subplots(2, 1, sharex=True)
+    ax_x.plot(t, x, lw=0.4)
+    ax_x.set(ylabel="x(t)", title=f"Entrada: chirp de 0 a {FS / 2:g} Hz en {duracion:g} s")
+    ax_y.plot(t, y, lw=0.4, label="salida")
+    ax_y.axvspan(t_corte - ancho / 2 * duracion / (FS / 2),
+                 t_corte + ancho / 2 * duracion / (FS / 2),
+                 color="tab:orange", alpha=0.25, label=f"transicion (~{ancho:.0f} Hz)")
+    ax_y.set(xlabel="t [s]", ylabel="y(t)",
+             title=f"Salida del pasabajos fc={FC:g} Hz (Hamming, n_coef={N_COEF})")
+    ax_y.legend(loc="upper right", fontsize=8)
+    for ax in (ax_x, ax_y):
+        ax.axvline(t_corte, color="k", ls=":", lw=0.8)
+        ax.grid(alpha=0.3)
+    sec = ax_x.secondary_xaxis("top", functions=(lambda tt: tt * FS / 2 / duracion,
+                                                lambda f: f * duracion / (FS / 2)))
+    sec.set_xlabel("frecuencia instantanea [Hz]")
     fig.tight_layout()
-    fig.savefig(salida / "filtros_aplicacion.png", dpi=120)
+    fig.savefig(salida / "filtros_chirp.png", dpi=120)

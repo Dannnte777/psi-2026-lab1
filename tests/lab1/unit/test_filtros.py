@@ -181,3 +181,38 @@ def test_ventanas_ordenadas_por_atenuacion_y_por_ancho():
     anchos, atenuaciones = zip(*medidas)
     assert list(atenuaciones) == sorted(atenuaciones)
     assert list(anchos) == sorted(anchos)
+
+
+# --- pruebas que pide explicitamente el enunciado (Tarea 4.4) -------------------------
+
+
+@pytest.mark.parametrize("n_coef", [51, 101, 201])
+def test_hamming_ganancia_1_en_paso_y_bajo_menos_40_db_en_rechazo(n_coef):
+    fc = 100
+    h = fir_pasabajos(fc, FS, n_coef, "hamming")
+    freqs, H = respuesta_frecuencia(h, FS)
+    db = 20 * np.log10(np.abs(H))
+    ancho = 3.3 * FS / n_coef  # ancho de transicion teorico de Hamming
+    assert np.allclose(np.abs(H[freqs <= fc - ancho / 2]), 1, atol=0.01)
+    assert db[freqs >= fc + ancho / 2].max() < -40
+
+
+@pytest.mark.parametrize("posicion", [100, 250, 400])
+def test_filtrar_no_desplaza_un_pulso(posicion):
+    # Un pulso gaussiano ancho (de banda angosta) sale con su maximo en el mismo instante
+    n = np.arange(500)
+    pulso = np.exp(-(((n - posicion) / 10) ** 2) / 2)
+    y = filtrar(pulso, fir_pasabajos(100, FS, N))
+    assert np.argmax(y) == posicion
+    # el pulso cabe en la banda de paso: solo lo deforma el rizado de Hamming (~0.002)
+    assert np.allclose(y, pulso, atol=3e-3)
+
+
+def test_filtrar_impulso_devuelve_h_centrada():
+    # La respuesta a un impulso en n0 es h, con su centro en n0 (retardo compensado)
+    h = fir_pasabajos(100, FS, N)
+    x = np.zeros(300)
+    x[150] = 1
+    y = filtrar(x, h)
+    assert np.argmax(y) == 150
+    assert np.allclose(y[150 - N // 2 : 150 + N // 2 + 1], h)
